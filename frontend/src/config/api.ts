@@ -12,6 +12,9 @@ export const API_CONFIG = {
     CHAT: '/ask',
     // Same answer, streamed as newline-delimited JSON while it is written.
     CHAT_STREAM: '/ask/stream',
+    // Human verification (CAPTCHA), see services/captcha.ts.
+    CAPTCHA_CONFIG: '/captcha/config',
+    CAPTCHA_VERIFY: '/captcha/verify',
   },
 
   // Give up on a stream that has sent nothing (not even a keep-alive, which

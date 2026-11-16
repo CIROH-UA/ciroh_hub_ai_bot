@@ -34,6 +34,9 @@ export function ChatPanel({
     handleShowChat,
     email,
     quota,
+    captchaConfig,
+    needsVerification,
+    captchaNotice,
     handleSetEmail,
     handleChangeEmail,
   } = useChat();
@@ -103,8 +106,16 @@ export function ChatPanel({
       )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-        {!email ? (
-          <WelcomeGate isDarkMode={isDarkMode} onSubmit={handleSetEmail} />
+        {!email || needsVerification ? (
+          <WelcomeGate
+            // Remount with the right email when coming back to verify.
+            key={email ?? 'new'}
+            isDarkMode={isDarkMode}
+            initialEmail={email}
+            captcha={captchaConfig}
+            notice={captchaNotice}
+            onSubmit={handleSetEmail}
+          />
         ) : showPrivacy ? (
           <div className="space-y-4">
             <button
@@ -144,7 +155,7 @@ export function ChatPanel({
         )}
       </div>
 
-      {email && (
+      {email && !needsVerification && (
         <ChatInput
           inputValue={inputValue}
           isBotResponding={isBotResponding}

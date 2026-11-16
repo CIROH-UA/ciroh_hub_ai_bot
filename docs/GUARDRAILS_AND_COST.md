@@ -17,6 +17,7 @@ trusting the defaults.
 | 7. Output token cap | `maxTokens` on every Converse call (`MAX_ANSWER_TOKENS`, default 500) | `bedrock_client.converse_text()` | Caps how much "work" even a successful jailbreak can extract per request |
 | 8. Input length validation | `Field(max_length=2000)` on the question | `backend/rag/main.py` | Oversized payloads padding token cost or attempting length-based injection |
 | 9. WAF rate limit + managed rules | Rate-based rule on `/ask` (per viewer IP, 5-min window) + AWS Managed Common Rule Set, on CloudFront | `infra/stacks/frontend_stack.py` | Volume abuse, independent of what any single request asks for |
+| 9b. CAPTCHA (Cloudflare Turnstile) | One check per email per day, exchanged for a signed human pass that every question must carry; off until configured | `backend/rag/captcha.py`, `WelcomeGate.tsx`, see [CAPTCHA.md](CAPTCHA.md) | Bots and scripts asking questions automatically, before any Bedrock or database work |
 | 10. API Gateway throttling | Steady-state/burst request limits | `infra/stacks/backend_stack.py` | Same, a second layer |
 | 11. AWS Budgets | 50/80/100% alarms, scoped to Bedrock specifically and to the project cost tag overall | `infra/stacks/observability_stack.py` | A runaway bill actually reaching the invoice before anyone notices |
 

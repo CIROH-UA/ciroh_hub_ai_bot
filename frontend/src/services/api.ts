@@ -1,5 +1,6 @@
 import { API_CONFIG, getApiUrl } from '../config/api';
 import { getSessionId } from './telemetry';
+import { CaptchaRequiredError, captchaErrorFrom } from './captcha';
 import type { QuotaInfo, SourceDetail, UsageInfo } from '../components/chat/types';
 
 /** One earlier message, sent so follow-up questions are understood in context. */
@@ -14,6 +15,8 @@ export interface ChatRequest {
   email: string;
   /** Recent conversation, oldest first (see buildHistory in useChat). */
   history?: HistoryTurn[];
+  /** Signed pass from /captcha/verify; required when CAPTCHA is enabled. */
+  human_pass?: string | null;
 }
 
 export interface ChatResponse {
@@ -105,6 +108,8 @@ export class ChatAPI {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        const captchaError = await captchaErrorFrom(response);
+        if (captchaError) throw captchaError;
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
@@ -129,6 +134,9 @@ export class ChatAPI {
         
         // Don't retry on certain errors
         if (error instanceof Error && error.name === 'AbortError') {
+          throw error;
+        }
+        if (error instanceof CaptchaRequiredError) {
           throw error;
         }
 
@@ -179,6 +187,9 @@ export class ChatAPI {
         throw new StreamUnavailableError(error instanceof Error ? error.message : 'fetch failed');
       }
       if (!response.ok || !response.body) {
+        // Not worth falling back to /ask: it would refuse the same way.
+        const captchaError = await captchaErrorFrom(response);
+        if (captchaError) throw captchaError;
         throw new StreamUnavailableError(`HTTP error! status: ${response.status}`);
       }
 
@@ -299,6 +310,8 @@ export class ChatAPI {
         quota: data.quota,
       };
     } catch (error) {
+      // The caller sends the visitor back to the verification step.
+      if (error instanceof CaptchaRequiredError) throw error;
       console.error('Chat API error:', error);
       
       let errorMessage = 'Sorry, I encountered an error while processing your question. Please try again later.';

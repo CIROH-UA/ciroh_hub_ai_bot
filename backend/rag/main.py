@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import captcha
 from ask import answer_question, answer_question_stream
 from quota import normalize_email
 
@@ -56,13 +57,57 @@ class Question(BaseModel):
     email: str = Field(..., min_length=3, max_length=254)
     # Most recent turns last; ask.py keeps only the last few.
     history: list[Turn] = Field(default_factory=list, max_length=20)
+    # Signed pass from POST /captcha/verify; required only when CAPTCHA is
+    # enabled (captcha.py, docs/CAPTCHA.md).
+    human_pass: Optional[str] = Field(None, max_length=1024)
 
 
 def _require_email(question: Question) -> str:
     email = normalize_email(question.email)
     if email is None:
         raise HTTPException(status_code=400, detail="A valid email address is required.")
+    _require_human(question.human_pass, email)
     return email
+
+
+def _captcha_unavailable(exc: Exception) -> HTTPException:
+    print(f"captcha: {exc}")
+    return HTTPException(
+        status_code=503,
+        detail={"code": "captcha_unavailable", "message": "Verification is temporarily unavailable. Please try again shortly."},
+    )
+
+
+def _require_human(human_pass: Optional[str], email: str) -> None:
+    """403 unless CAPTCHA is off or `human_pass` is valid for `email`.
+
+    Checked before any Bedrock or database work, so a bot without a pass
+    costs one Lambda invocation and nothing else."""
+    if not captcha.is_enabled():
+        return
+    try:
+        ok = captcha.check_pass(human_pass, email)
+    except captcha.CaptchaUnavailableError as exc:
+        raise _captcha_unavailable(exc) from exc
+    if not ok:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "captcha_required", "message": "Please confirm you are human to keep chatting."},
+        )
+
+
+class CaptchaVerifyRequest(BaseModel):
+    token: str = Field(..., min_length=1, max_length=2048)
+    email: str = Field(..., min_length=3, max_length=254)
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    # Behind CloudFront + API Gateway the viewer's address is the first
+    # X-Forwarded-For entry; Turnstile uses it only as an extra signal.
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip() or None
+    return request.client.host if request.client else None
 
 
 class TelemetryEvent(BaseModel):
@@ -102,6 +147,39 @@ def _warm_database() -> None:
 @app.get("/", tags=["Health Check"])
 def read_root():
     return {"status": "CIROH AI Bot v2 API is running"}
+
+
+@app.get("/captcha/config", tags=["Human verification"])
+def captcha_config():
+    """Whether the chat must show the CAPTCHA, and the widget's public site key."""
+    return captcha.public_config()
+
+
+@app.post("/captcha/verify", tags=["Human verification"])
+def captcha_verify(body: CaptchaVerifyRequest, request: Request):
+    """Exchange a solved Turnstile token for a signed human pass bound to the email."""
+    email = normalize_email(body.email)
+    if email is None:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    if not captcha.is_enabled():
+        return {"enabled": False, "human_pass": None, "expires_at": None}
+    try:
+        ok, errors = captcha.verify_token(body.token, _client_ip(request))
+        if not ok:
+            _append_telemetry({"event": "captcha_failed", "errors": errors})
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "captcha_failed", "message": "Verification failed. Please try again.", "errors": errors},
+            )
+        human_pass, expires_at = captcha.issue_pass(email)
+    except captcha.CaptchaUnavailableError as exc:
+        raise _captcha_unavailable(exc) from exc
+    _append_telemetry({"event": "captcha_passed"})
+    return {
+        "enabled": True,
+        "human_pass": human_pass,
+        "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+    }
 
 
 @app.post("/ask", tags=["AI Assistant"])

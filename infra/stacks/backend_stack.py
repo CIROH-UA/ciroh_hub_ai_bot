@@ -147,6 +147,10 @@ class BackendStack(Construct):
         bedrock_embed_dimensions: int = 1024,
         retrieval_similarity_threshold: float = 0.7,
         web_adapter_layer_version: int = 25,
+        turnstile_site_key: Optional[str] = None,
+        turnstile_secret_arn: Optional[str] = None,
+        turnstile_allowed_hostnames: Optional[str] = None,
+        captcha_pass_ttl_hours: Optional[float] = None,
     ) -> None:
         super().__init__(scope, construct_id)
 
@@ -166,6 +170,17 @@ class BackendStack(Construct):
         if guardrail_id:
             environment["BEDROCK_GUARDRAIL_ID"] = guardrail_id
             environment["BEDROCK_GUARDRAIL_VERSION"] = guardrail_version or "DRAFT"
+        # CAPTCHA (docs/CAPTCHA.md): on only when both keys are configured.
+        # The secret key stays in Secrets Manager; only its ARN is in the
+        # environment, and rag/captcha.py reads it at first use.
+        captcha_enabled = bool(turnstile_site_key and turnstile_secret_arn)
+        if captcha_enabled:
+            environment["TURNSTILE_SITE_KEY"] = turnstile_site_key
+            environment["TURNSTILE_SECRET_ARN"] = turnstile_secret_arn
+            if turnstile_allowed_hostnames:
+                environment["TURNSTILE_ALLOWED_HOSTNAMES"] = turnstile_allowed_hostnames
+            if captcha_pass_ttl_hours:
+                environment["CAPTCHA_PASS_TTL_HOURS"] = str(captcha_pass_ttl_hours)
 
         runtime = _lambda.Runtime.PYTHON_3_12
         code = _lambda.Code.from_asset(
@@ -281,6 +296,15 @@ class BackendStack(Construct):
                     resources=[aurora_secret_arn],
                 )
             )
+            if captcha_enabled:
+                # Secrets Manager appends a random 6-character suffix to a
+                # secret's ARN; allow it whether or not the ARN given has it.
+                fn.add_to_role_policy(
+                    iam.PolicyStatement(
+                        actions=["secretsmanager:GetSecretValue"],
+                        resources=[turnstile_secret_arn, f"{turnstile_secret_arn}-??????"],
+                    )
+                )
 
         self.http_api = apigwv2.HttpApi(
             self,

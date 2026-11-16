@@ -76,6 +76,18 @@ class CirohStack(cdk.Stack):
         # (docs/AWS_DEPLOYMENT.md), and the recurring ingestion it exists for
         # is still notebook-driven (README, "In Progress / Planned").
         enable_ingestion = str(self.node.try_get_context("enable_ingestion")).lower() == "true"
+        # CAPTCHA (Cloudflare Turnstile, docs/CAPTCHA.md). Off until both are
+        # set: the widget's public site key, and the ARN of a Secrets Manager
+        # secret holding the Turnstile secret key.
+        turnstile_site_key = self.node.try_get_context("turnstile_site_key") or None
+        turnstile_secret_arn = self.node.try_get_context("turnstile_secret_arn") or None
+        turnstile_allowed_hostnames = self.node.try_get_context("turnstile_allowed_hostnames") or None
+        captcha_pass_ttl_hours = self.node.try_get_context("captcha_pass_ttl_hours") or None
+        if bool(turnstile_site_key) != bool(turnstile_secret_arn):
+            cdk.Annotations.of(self).add_warning(
+                "Only one of turnstile_site_key / turnstile_secret_arn is set: CAPTCHA stays off."
+            )
+
         # CloudFront-scoped WAF web ACLs can only be created in us-east-1.
         enable_waf = self.region == "us-east-1"
         if not enable_waf:
@@ -112,6 +124,10 @@ class CirohStack(cdk.Stack):
             guardrail_version=guardrail.guardrail_version,
             retrieval_similarity_threshold=similarity_threshold,
             bedrock_chat_model_id=chat_model_id,
+            turnstile_site_key=turnstile_site_key,
+            turnstile_secret_arn=turnstile_secret_arn,
+            turnstile_allowed_hostnames=turnstile_allowed_hostnames,
+            captcha_pass_ttl_hours=float(captcha_pass_ttl_hours) if captcha_pass_ttl_hours else None,
         )
 
         frontend = FrontendStack(

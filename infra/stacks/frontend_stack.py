@@ -87,6 +87,8 @@ class FrontendStack(Construct):
         additional_behaviors = {
             "/ask": api_behavior,
             "/telemetry": api_behavior,
+            # /captcha/config and /captcha/verify (docs/CAPTCHA.md).
+            "/captcha/*": api_behavior,
         }
         if stream_function_url is not None:
             # Streaming answers go straight to the streaming Lambda's

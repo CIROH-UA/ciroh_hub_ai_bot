@@ -4,6 +4,11 @@ Checks that a question without an email is refused, streams one answer from
 /ask/stream (the path the chat uses), sends a few on-topic questions and one
 off-topic question to /ask, and reports status, latency, route and sources.
 Questions are counted against --email's daily limit like any user's.
+
+When the site has CAPTCHA switched on (docs/CAPTCHA.md), it also checks
+that a question without a human pass is refused. The question checks then
+need a pass: set TURNSTILE_SECRET_KEY (the same secret the API uses) and
+the script signs one itself; without it they are skipped with a warning.
 The site URL is read from the CirohStack outputs (needs AWS credentials),
 or pass it with --url.
 
@@ -20,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -83,6 +89,31 @@ def _stream(url: str, payload: dict, timeout: int = 120) -> tuple[int, list[dict
     return status, events, time.time() - started, first_text
 
 
+def _get(url: str, timeout: int = 30) -> tuple[int, dict | str]:
+    req = urllib.request.Request(url, headers={"User-Agent": "ciroh-smoke-test"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body, status = resp.read().decode(), resp.status
+    except urllib.error.HTTPError as e:
+        body, status = e.read().decode(errors="replace"), e.code
+    try:
+        return status, json.loads(body)
+    except json.JSONDecodeError:
+        return status, body[:300]
+
+
+def _human_pass(email: str) -> str | None:
+    """Signs a pass like /captcha/verify would, if the Turnstile secret is
+    in this environment (the smoke test can't solve a real challenge)."""
+    if not os.getenv("TURNSTILE_SECRET_KEY"):
+        return None
+    sys.path.insert(0, str(REPO_ROOT / "backend" / "rag"))
+    import captcha
+    from quota import normalize_email
+
+    return captcha.issue_pass(normalize_email(email) or email)[0]
+
+
 def _post(url: str, payload: dict, timeout: int = 60) -> tuple[int, dict | str, float]:
     req = _request(url, payload)
     started = time.time()
@@ -124,8 +155,29 @@ def main() -> int:
     failures += not ok
     print(f"\n[{'OK' if ok else 'FAIL'}] a question without an email is refused (HTTP {status}, expected 422)")
 
+    # Human verification (docs/CAPTCHA.md).
+    status, config = _get(f"{base}/captcha/config")
+    captcha_on = status == 200 and isinstance(config, dict) and bool(config.get("enabled"))
+    failures += status != 200
+    print(f"\n[{'OK' if status == 200 else 'FAIL'}] /captcha/config -> HTTP {status}, CAPTCHA {'on' if captcha_on else 'off'}")
+    extra: dict = {}
+    if captcha_on:
+        status, body, _ = _post(f"{base}/ask", {"text": DEFAULT_QUESTIONS[0], "email": args.email})
+        detail = body.get("detail") if isinstance(body, dict) else None
+        ok = status == 403 and isinstance(detail, dict) and detail.get("code") == "captcha_required"
+        failures += not ok
+        print(f"[{'OK' if ok else 'FAIL'}] a question without a human pass is refused (HTTP {status}, expected 403)")
+        human_pass = _human_pass(args.email)
+        if human_pass is None:
+            print("[WARN] TURNSTILE_SECRET_KEY is not set, so the question checks are skipped.")
+            print("\nAll checks passed." if not failures else f"\n{failures} check(s) failed.")
+            return 1 if failures else 0
+        extra = {"human_pass": human_pass}
+
     question = (args.question or DEFAULT_QUESTIONS)[0]
-    status, events, elapsed, first_text = _stream(f"{base}/ask/stream", {"text": question, "email": args.email})
+    status, events, elapsed, first_text = _stream(
+        f"{base}/ask/stream", {"text": question, "email": args.email, **extra}
+    )
     done = next((e for e in events if e.get("type") == "done"), None)
     deltas = sum(e.get("type") == "delta" for e in events)
     ok = status == 200 and done is not None and deltas > 1 and done.get("route") not in ("rejected", "unavailable")
@@ -138,7 +190,7 @@ def main() -> int:
         print(f"      follow-ups: {done.get('follow_ups')}")
 
     for question in args.question or DEFAULT_QUESTIONS:
-        status, body, elapsed = _post(f"{base}/ask", {"text": question, "email": args.email})
+        status, body, elapsed = _post(f"{base}/ask", {"text": question, "email": args.email, **extra})
         ok = status == 200 and isinstance(body, dict) and body.get("route") not in (None, "rejected")
         failures += not ok
         print(f"\n[{'OK' if ok else 'FAIL'}] {question}")
@@ -151,7 +203,7 @@ def main() -> int:
         else:
             print(f"      body: {body}")
 
-    status, body, elapsed = _post(f"{base}/ask", {"text": OFF_TOPIC_QUESTION, "email": args.email})
+    status, body, elapsed = _post(f"{base}/ask", {"text": OFF_TOPIC_QUESTION, "email": args.email, **extra})
     refused = status == 200 and isinstance(body, dict) and body.get("route") == "rejected"
     print(f"\n[{'OK' if refused else 'WARN'}] off-topic question is refused")
     print(f"      HTTP {status} in {elapsed:.1f}s, route: {body.get('route') if isinstance(body, dict) else body}")

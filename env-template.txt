@@ -54,6 +54,17 @@ BEDROCK_GUARDRAIL_VERSION=
 # docs/GUARDRAILS_AND_COST.md
 RETRIEVAL_SIMILARITY_THRESHOLD=0.7
 
+# --- CAPTCHA (Cloudflare Turnstile, see docs/CAPTCHA.md) --------------------
+# Leave blank to run without CAPTCHA. For local testing use Cloudflare's
+# test keys (always pass): site key 1x00000000000000000000AA,
+# secret key 1x0000000000000000000000000000000AA.
+TURNSTILE_SITE_KEY=
+TURNSTILE_SECRET_KEY=
+# Optional: comma-separated hostnames the widget may be solved on
+TURNSTILE_ALLOWED_HOSTNAMES=
+# How long one verification lasts (hours)
+CAPTCHA_PASS_TTL_HOURS=24
+
 # Comma-separated CORS origins for backend/rag/main.py; irrelevant in
 # production once served through the CloudFront distribution (same-origin)
 ALLOWED_ORIGINS=

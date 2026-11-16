@@ -77,6 +77,7 @@ Full deployment guide, architecture reference, and infrastructure-as-code:
 - [docs/AWS_DEPLOYMENT.md](docs/AWS_DEPLOYMENT.md) - step-by-step: prerequisites, CDK deploy, corpus re-embedding, cutover
 - [docs/AWS_ARCHITECTURE.md](docs/AWS_ARCHITECTURE.md) - component mapping, request flow, known limitations
 - [docs/GUARDRAILS_AND_COST.md](docs/GUARDRAILS_AND_COST.md) - scope/cost guardrails and what to tune before trusting the defaults
+- [docs/CAPTCHA.md](docs/CAPTCHA.md) - Cloudflare Turnstile human verification: how it works, setup, configuration
 - [infra/](infra/) - AWS CDK (Python) app provisioning the whole stack
 
 ---

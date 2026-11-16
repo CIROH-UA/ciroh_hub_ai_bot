@@ -2,32 +2,71 @@
 //
 // First screen of the chat: the privacy notice plus the email the visitor
 // must provide before asking questions (the API limits questions per email
-// per day).
+// per day), and, when the API has it switched on, the CAPTCHA
+// (docs/CAPTCHA.md).
 
 import { FormEvent, useState } from 'react';
-import { Bot, ArrowRight } from 'lucide-react';
+import { Bot, ArrowRight, Loader2 } from 'lucide-react';
 import { PrivacyNotice } from './PrivacyNotice';
+import { TurnstileWidget } from './TurnstileWidget';
 import { DAILY_QUESTION_LIMIT } from './data';
 import { normalizeEmail } from '../../services/user';
+import { CAPTCHA_DISABLED, CaptchaConfig, HumanPass, verifyHuman } from '../../services/captcha';
 
 interface WelcomeGateProps {
   isDarkMode: boolean;
   initialEmail?: string | null;
-  onSubmit: (email: string) => void;
+  captcha?: CaptchaConfig;
+  /** Why the visitor is here again (e.g. their verification expired). */
+  notice?: string | null;
+  onSubmit: (email: string, humanPass: HumanPass | null) => void;
 }
 
-export function WelcomeGate({ isDarkMode, initialEmail, onSubmit }: WelcomeGateProps) {
+export function WelcomeGate({
+  isDarkMode,
+  initialEmail,
+  captcha = CAPTCHA_DISABLED,
+  notice,
+  onSubmit,
+}: WelcomeGateProps) {
   const [value, setValue] = useState(initialEmail ?? '');
   const [error, setError] = useState<string | null>(null);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaError, setCaptchaError] = useState<string | null>(null);
+  const [widgetKey, setWidgetKey] = useState(0);
+  const [verifying, setVerifying] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  const captchaOn = captcha.enabled;
+  const canSubmit = !verifying && (!captchaOn || !!captchaToken);
+
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const email = normalizeEmail(value);
     if (!email) {
       setError('Please enter a valid email address.');
       return;
     }
-    onSubmit(email);
+    if (!captchaOn) {
+      onSubmit(email, null);
+      return;
+    }
+    if (!captchaToken) {
+      setCaptchaError('Please complete the verification check.');
+      return;
+    }
+    setVerifying(true);
+    setCaptchaError(null);
+    try {
+      const pass = await verifyHuman(captchaToken, email);
+      onSubmit(email, pass);
+    } catch (err) {
+      setCaptchaError(err instanceof Error ? err.message : 'Verification failed. Please try again.');
+      // Turnstile tokens are single-use: get a fresh one for the retry.
+      setCaptchaToken(null);
+      setWidgetKey(k => k + 1);
+    } finally {
+      setVerifying(false);
+    }
   };
 
   const muted = isDarkMode ? 'text-gray-400' : 'text-gray-500';
@@ -50,6 +89,19 @@ export function WelcomeGate({ isDarkMode, initialEmail, onSubmit }: WelcomeGateP
           CIROH documentation, with sources.
         </p>
       </div>
+
+      {notice && (
+        <div
+          role="status"
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            isDarkMode
+              ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+              : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}
+        >
+          {notice}
+        </div>
+      )}
 
       <section
         className={`rounded-xl border p-4 ${
@@ -98,12 +150,44 @@ export function WelcomeGate({ isDarkMode, initialEmail, onSubmit }: WelcomeGateP
         >
           {error ?? `Used only to apply the limit of ${DAILY_QUESTION_LIMIT} questions per day.`}
         </p>
+        {captchaOn && (
+          <div className="pt-1 space-y-1" aria-label="Verification check">
+            {captcha.site_key ? (
+              <TurnstileWidget
+                siteKey={captcha.site_key}
+                isDarkMode={isDarkMode}
+                resetKey={widgetKey}
+                onToken={token => {
+                  setCaptchaToken(token);
+                  if (token) setCaptchaError(null);
+                }}
+              />
+            ) : (
+              <p className={`text-xs text-center ${muted}`}>Loading the verification check...</p>
+            )}
+            {captchaError && (
+              <p className="text-xs text-red-500 text-center" role="alert">
+                {captchaError}
+              </p>
+            )}
+          </div>
+        )}
         <button
           type="submit"
-          className="w-full mt-1 flex items-center justify-center gap-2 rounded-full bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 transition-colors"
+          disabled={!canSubmit}
+          className="w-full mt-1 flex items-center justify-center gap-2 rounded-full bg-primary-600 hover:bg-primary-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium py-2.5 transition-colors"
         >
-          Agree and start chatting
-          <ArrowRight className="h-4 w-4" />
+          {verifying ? (
+            <>
+              Verifying
+              <Loader2 className="h-4 w-4 animate-spin" />
+            </>
+          ) : (
+            <>
+              Agree and start chatting
+              <ArrowRight className="h-4 w-4" />
+            </>
+          )}
         </button>
       </form>
     </div>
